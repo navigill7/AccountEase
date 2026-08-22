@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="5" time="2.491" timestamp="2026-08-22T09:30:21.224793+00:00" hostname="agent-env-7b6d9764-a390-4c32-af97-7a28d9cfaa0f"><testcase classname="tests.backend_test" name="test_demo_login_route" time="0.182"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/backend_test.py:14: in test_demo_login_route
+    assert response.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.backend_test" name="test_invalid_login_is_rejected" time="0.133"><failure message="assert 404 == 401&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/backend_test.py:24: in test_invalid_login_is_rejected
+    assert response.status_code == 401
+E   assert 404 == 401
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.backend_test" name="test_organizations_route_returns_shop_data" time="0.129"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/backend_test.py:29: in test_organizations_route_returns_shop_data
+    assert response.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.backend_test" name="test_customer_route_returns_customer_data" time="0.126"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/backend_test.py:37: in test_customer_route_returns_customer_data
+    assert response.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase><testcase classname="tests.backend_test" name="test_transaction_route_supports_date_filters" time="0.132"><failure message="assert 404 == 200&#10; +  where 404 = &lt;Response [404]&gt;.status_code">backend/tests/backend_test.py:47: in test_transaction_route_supports_date_filters
+    assert response.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = &lt;Response [404]&gt;.status_code</failure></testcase></testsuite></testsuites>

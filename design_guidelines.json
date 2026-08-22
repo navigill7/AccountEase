@@ -1,0 +1,45 @@
+{
+  "app_name": "AccountEase",
+  "app_type": "hybrid_fullstack",
+  "theme": "light_warm_ledger",
+  "typography": {
+    "heading_font": "Outfit, sans-serif",
+    "body_font": "Inter, sans-serif",
+    "mono_font": "JetBrains Mono, monospace"
+  },
+  "colors": {
+    "primary": "#1E3A8A",
+    "primary_hover": "#1E40AF",
+    "background": "#F8FAFC",
+    "card_bg": "#FFFFFF",
+    "text_primary": "#0F172A",
+    "text_secondary": "#64748B",
+    "accent_green": "#16A34A",
+    "accent_red": "#DC2626",
+    "border": "#E2E8F0"
+  },
+  "image_urls": [
+    {
+      "category": "ledger_notebook",
+      "url": "https://images.unsplash.com/photo-1595014361663-4c3e702f9c44?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxzaG9wJTIwbGVkZ2VyJTIwYWNjb3VudGluZyUyMHZpbnRhZ2UlMjBub3RlYm9va3xlbnwwfHx8fDE3ODczOTA1NDR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Vintage shop ledger notebook representation"
+    }
+  ],
+  "features": [
+    "JWT Authentication with demo owner seed",
+    "Multi-shop (Organization) Management",
+    "Customer / Khata ledger management",
+    "Manual running balance transaction records",
+    "Advanced search, date filtering, print preview",
+    "WhatsApp sharing for individual or all filtered records"
+  ],
+  "guidelines": {
+    "universal_rules": [
+      "Use data-testid attributes on all interactive elements",
+      "Mobile-first responsive design",
+      "Sonner for toasts",
+      "Shadcn UI primitives with custom warm ledger styling",
+      "NO transparent backgrounds for overlays and headers"
+    ]
+  }
+}
