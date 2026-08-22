@@ -25,3 +25,6 @@
 .quick-icon.delete{color:#b04628}
 .quick-icon.delete:hover{background:#fbe6df;color:#8f371d}
 @media(max-width:760px){.record-header-row{padding-right:8px;gap:4px}.quick-icon{height:34px;width:34px;border-radius:8px}}
+.field input.readonly-input{background:#f4f7f2;color:var(--green);font-weight:700;cursor:default}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}

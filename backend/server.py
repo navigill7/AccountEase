@@ -61,6 +61,13 @@ api = APIRouter(prefix="/api")
 async def _startup() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        # Idempotent add of `paid` column for existing databases created before its introduction.
+        await conn.execute(text('ALTER TABLE ae_transactions ADD COLUMN IF NOT EXISTS paid NUMERIC(14,2) NOT NULL DEFAULT 0'))
+        # One-time normalisation: align legacy running-total balances with the new
+        # accounting rule `balance = amount - paid`. Runs every boot but is idempotent
+        # and cheap — Postgres just no-ops rows already in the correct state.
+        await conn.execute(text('UPDATE ae_transactions SET balance = amount - paid WHERE balance <> amount - paid'))
     async with AsyncSessionLocal() as session:
         await _seed_demo(session)
 
@@ -106,6 +113,7 @@ async def _seed_demo(session: AsyncSession) -> None:
             session.add(cust)
             await session.flush()
             if cname == "Aarav Sharma":
+                # Ledger seed uses new accounting rule: balance = amount - paid
                 session.add(
                     Transaction(
                         customer_id=cust.id,
@@ -114,7 +122,8 @@ async def _seed_demo(session: AsyncSession) -> None:
                         quantity=Decimal("6"),
                         rate=Decimal("420"),
                         amount=Decimal("2520"),
-                        balance=Decimal("9640"),
+                        paid=Decimal("500"),
+                        balance=Decimal("2020"),
                     )
                 )
                 session.add(
@@ -125,7 +134,8 @@ async def _seed_demo(session: AsyncSession) -> None:
                         quantity=Decimal("1"),
                         rate=Decimal("2840"),
                         amount=Decimal("2840"),
-                        balance=Decimal("12480"),
+                        paid=Decimal("0"),
+                        balance=Decimal("2840"),
                     )
                 )
         await session.commit()
@@ -233,14 +243,12 @@ async def _customer_or_404(session: AsyncSession, customer_id: str, owner_id: st
 
 async def _customer_balance(session: AsyncSession, customer_id: str) -> Decimal:
     stmt = (
-        select(Transaction.balance)
+        select(func.coalesce(func.sum(Transaction.balance), 0))
         .where(Transaction.customer_id == customer_id)
-        .order_by(Transaction.date.desc(), Transaction.created_at.desc())
-        .limit(1)
     )
     result = await session.execute(stmt)
-    val = result.scalar_one_or_none()
-    return Decimal(val) if val is not None else Decimal("0")
+    val = result.scalar_one()
+    return Decimal(val)
 
 
 @api.get("/organizations/{org_id}/customers", response_model=list[CustomerOut])
@@ -258,14 +266,12 @@ async def list_customers(
     customers = (await session.execute(stmt)).scalars().all()
     if not customers:
         return []
-    # One-shot latest-balance-per-customer using DISTINCT ON
+    # Single query: total owed per customer = SUM(balance) of their transactions.
     cust_ids = [c.id for c in customers]
-    from sqlalchemy import literal_column
     bal_stmt = (
-        select(Transaction.customer_id, Transaction.balance)
+        select(Transaction.customer_id, func.coalesce(func.sum(Transaction.balance), 0))
         .where(Transaction.customer_id.in_(cust_ids))
-        .order_by(Transaction.customer_id, Transaction.date.desc(), Transaction.created_at.desc())
-        .distinct(Transaction.customer_id)
+        .group_by(Transaction.customer_id)
     )
     balances: dict[str, Decimal] = {
         cid: Decimal(bal) for cid, bal in (await session.execute(bal_stmt)).all()
@@ -364,6 +370,27 @@ async def list_transactions(
     return [TransactionOut.model_validate(r) for r in rows]
 
 
+def _compute_amount_balance(
+    quantity: Decimal,
+    rate: Decimal,
+    amount: Decimal | None,
+    paid: Decimal,
+    balance: Decimal | None,
+) -> tuple[Decimal, Decimal]:
+    """Server-side authoritative math.
+
+    - amount = quantity * rate (if amount not explicitly provided, or if provided we keep it — clients that
+      trust the server to compute can send amount=None).
+    - balance = amount - paid (always recomputed server-side so the accounting invariant holds).
+    """
+    if amount is None:
+        amount = (Decimal(quantity) * Decimal(rate)).quantize(Decimal("0.01"))
+    computed_balance = (Decimal(amount) - Decimal(paid)).quantize(Decimal("0.01"))
+    # `balance` on the request is currently ignored intentionally — accounting rule wins.
+    _ = balance
+    return amount, computed_balance
+
+
 @api.post("/customers/{customer_id}/transactions", response_model=TransactionOut, status_code=201)
 async def create_transaction(
     customer_id: str,
@@ -372,7 +399,20 @@ async def create_transaction(
     session: AsyncSession = Depends(get_session),
 ) -> TransactionOut:
     await _customer_or_404(session, customer_id, owner.id)
-    tx = Transaction(customer_id=customer_id, **payload.model_dump())
+    amount, balance = _compute_amount_balance(
+        payload.quantity, payload.rate, payload.amount, payload.paid, payload.balance
+    )
+    tx = Transaction(
+        customer_id=customer_id,
+        date=payload.date,
+        item=payload.item.strip(),
+        quantity=payload.quantity,
+        rate=payload.rate,
+        amount=amount,
+        paid=payload.paid,
+        balance=balance,
+        note=payload.note,
+    )
     session.add(tx)
     await session.commit()
     await session.refresh(tx)
@@ -400,8 +440,27 @@ async def update_transaction(
     session: AsyncSession = Depends(get_session),
 ) -> TransactionOut:
     tx = await _tx_or_404(session, transaction_id, owner.id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(tx, field, value)
+    data = payload.model_dump(exclude_unset=True)
+    # Apply non-computed fields first
+    for field in ("date", "item", "note"):
+        if field in data:
+            setattr(tx, field, data[field])
+    # Apply numeric inputs, then recompute amount + balance
+    quantity = data.get("quantity", tx.quantity)
+    rate = data.get("rate", tx.rate)
+    paid = data.get("paid", tx.paid)
+    # If caller explicitly sent amount, honour it; otherwise recompute from qty*rate
+    amount_in = data.get("amount") if "amount" in data else None
+    if amount_in is None and ("quantity" in data or "rate" in data):
+        amount_in = None  # trigger recomputation
+    elif "amount" not in data:
+        amount_in = tx.amount  # keep existing when nothing changed
+    amount, balance = _compute_amount_balance(quantity, rate, amount_in, paid, None)
+    tx.quantity = quantity
+    tx.rate = rate
+    tx.paid = paid
+    tx.amount = amount
+    tx.balance = balance
     await session.commit()
     await session.refresh(tx)
     return TransactionOut.model_validate(tx)

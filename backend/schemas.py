@@ -64,19 +64,21 @@ class CustomerOut(BaseModel):
 class TransactionCreate(BaseModel):
     date: _date
     item: str = Field(..., min_length=1, max_length=200)
-    quantity: Decimal = Decimal("1")
-    rate: Decimal = Decimal("0")
-    amount: Decimal
-    balance: Decimal
+    quantity: Decimal = Field(default=Decimal("1"), ge=Decimal("0"))
+    rate: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
+    amount: Decimal | None = Field(default=None, ge=Decimal("0"))
+    paid: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
+    balance: Decimal | None = Field(default=None)
     note: str | None = None
 
 
 class TransactionUpdate(BaseModel):
     date: _date | None = None
     item: str | None = None
-    quantity: Decimal | None = None
-    rate: Decimal | None = None
-    amount: Decimal | None = None
+    quantity: Decimal | None = Field(default=None, ge=Decimal("0"))
+    rate: Decimal | None = Field(default=None, ge=Decimal("0"))
+    amount: Decimal | None = Field(default=None, ge=Decimal("0"))
+    paid: Decimal | None = Field(default=None, ge=Decimal("0"))
     balance: Decimal | None = None
     note: str | None = None
 
@@ -90,6 +92,7 @@ class TransactionOut(BaseModel):
     quantity: Decimal
     rate: Decimal
     amount: Decimal
+    paid: Decimal
     balance: Decimal
     note: str | None = None
     created_at: datetime

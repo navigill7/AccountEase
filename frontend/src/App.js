@@ -118,11 +118,11 @@ function PrintModal({ customer, records, balance, onClose }) {
         {records.length === 0 && <p className="muted">No records yet.</p>}
         {records.map((r) => (
           <div className="print-row" key={r.id}>
-            <span>{fmtDate(r.date)}<small>{r.item}</small></span>
-            <b>{INR(r.amount)}</b>
+            <span>{fmtDate(r.date)}<small>{r.item} · Paid {INR(r.paid)}</small></span>
+            <b>{INR(r.balance)}</b>
           </div>
         ))}
-        <div className="print-total"><span>Current balance</span><b>{INR(balance)}</b></div>
+        <div className="print-total"><span>Total outstanding</span><b>{INR(balance)}</b></div>
       </div>
       <div className="modal-actions">
         <button className="button secondary" onClick={onClose} data-testid="print-close-button">Close</button>
@@ -132,25 +132,93 @@ function PrintModal({ customer, records, balance, onClose }) {
   );
 }
 
+function NumField({ label, name, value, onChange, step = "0.01" }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={name}
+        type="number"
+        inputMode="decimal"
+        min="0"
+        step={step}
+        value={value}
+        onChange={onChange}
+        onWheel={(e) => e.currentTarget.blur()}
+        data-testid={`field-${name}`}
+      />
+    </label>
+  );
+}
+
 function RecordFormModal({ mode, initial, onClose, onSave, saving }) {
   const [form, setForm] = useState(initial);
-  const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const disabled = saving || !form.item.trim() || form.amount === "" || form.balance === "";
+  const [manualAmount, setManualAmount] = useState(false);
+
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  const setField = (patch) => setForm((prev) => ({ ...prev, ...patch }));
+
+  const onQty = (e) => {
+    const q = e.target.value;
+    const amount = manualAmount ? form.amount : String(round2(toNum(q) * toNum(form.rate)));
+    const balance = String(round2(toNum(amount) - toNum(form.paid)));
+    setField({ quantity: q, amount, balance });
+  };
+  const onRate = (e) => {
+    const r = e.target.value;
+    const amount = manualAmount ? form.amount : String(round2(toNum(form.quantity) * toNum(r)));
+    const balance = String(round2(toNum(amount) - toNum(form.paid)));
+    setField({ rate: r, amount, balance });
+  };
+  const onAmount = (e) => {
+    const a = e.target.value;
+    setManualAmount(true);
+    const balance = String(round2(toNum(a) - toNum(form.paid)));
+    setField({ amount: a, balance });
+  };
+  const onPaid = (e) => {
+    const p = e.target.value;
+    const balance = String(round2(toNum(form.amount) - toNum(p)));
+    setField({ paid: p, balance });
+  };
+  const onDate = (e) => setField({ date: e.target.value });
+  const onItem = (e) => setField({ item: e.target.value });
+
+  const isNumeric = (v) => v !== "" && v !== null && v !== undefined && !Number.isNaN(Number(v)) && Number(v) >= 0;
+  const disabled =
+    saving ||
+    !form.item.trim() ||
+    !isNumeric(form.quantity) ||
+    !isNumeric(form.rate) ||
+    !isNumeric(form.amount) ||
+    !isNumeric(form.paid);
+
   return (
     <Modal title={mode === "edit" ? "Edit ledger record" : "Add ledger record"} onClose={onClose}>
-      <p className="modal-copy">Record the transaction and manual running balance for this customer.</p>
+      <p className="modal-copy">
+        <b>Amount</b> auto-fills from Quantity × Rate; <b>Balance</b> is Amount − Paid. You can still tweak Amount by hand if the rate isn&apos;t uniform.
+      </p>
       <div className="two-col">
-        <Field label="Date" name="record-date" type="date" value={form.date} onChange={update("date")} />
-        <Field label="Item" name="record-item" placeholder="What was purchased?" value={form.item} onChange={update("item")} />
+        <Field label="Date" name="record-date" type="date" value={form.date} onChange={onDate} />
+        <Field label="Item" name="record-item" placeholder="What was purchased?" value={form.item} onChange={onItem} />
       </div>
       <div className="two-col">
-        <Field label="Quantity" name="record-quantity" value={form.quantity} onChange={update("quantity")} />
-        <Field label="Rate" name="record-rate" placeholder="0" value={form.rate} onChange={update("rate")} />
+        <NumField label="Quantity" name="record-quantity" value={form.quantity} onChange={onQty} step="0.001" />
+        <NumField label="Rate (₹)" name="record-rate" value={form.rate} onChange={onRate} />
       </div>
       <div className="two-col">
-        <Field label="Amount" name="record-amount" placeholder="0" value={form.amount} onChange={update("amount")} />
-        <Field label="Manual balance" name="record-balance" placeholder="0" value={form.balance} onChange={update("balance")} />
+        <NumField label="Amount (₹)" name="record-amount" value={form.amount} onChange={onAmount} />
+        <NumField label="Paid (₹)" name="record-paid" value={form.paid} onChange={onPaid} />
       </div>
+      <label className="field">
+        <span>Outstanding balance (₹) · auto</span>
+        <input name="record-balance" value={form.balance} readOnly data-testid="field-record-balance" className="readonly-input" />
+      </label>
       <div className="modal-actions">
         <button className="button secondary" onClick={onClose} data-testid="add-record-cancel">Cancel</button>
         <button className="button primary" onClick={() => onSave(form)} disabled={disabled} data-testid="add-record-submit">
@@ -497,9 +565,12 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
     const payload = {
       date: form.date,
       item: form.item.trim(),
-      quantity: form.quantity || "1",
+      quantity: form.quantity || "0",
       rate: form.rate || "0",
       amount: form.amount || "0",
+      paid: form.paid || "0",
+      // balance is authoritatively recomputed by the backend from amount - paid,
+      // but we send our local view so audit logs / clients that skip recompute stay consistent.
       balance: form.balance || "0",
     };
     try {
@@ -541,8 +612,8 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
   };
 
   const entryInitial = editing
-    ? { date: editing.date, item: editing.item, quantity: String(editing.quantity ?? "1"), rate: String(editing.rate ?? ""), amount: String(editing.amount ?? ""), balance: String(editing.balance ?? "") }
-    : { date: isoToday(), item: "", quantity: "1", rate: "", amount: "", balance: "" };
+    ? { date: editing.date, item: editing.item, quantity: String(editing.quantity ?? "1"), rate: String(editing.rate ?? "0"), amount: String(editing.amount ?? "0"), paid: String(editing.paid ?? "0"), balance: String(editing.balance ?? "0") }
+    : { date: isoToday(), item: "", quantity: "1", rate: "", amount: "", paid: "0", balance: "" };
 
   return (
     <div className="app-shell">
@@ -557,7 +628,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
             <p>{customer.mobile_number} <i>·</i> {customer.father_name ? `S/o ${customer.father_name}` : "No father's name"}</p>
             <span><MapPin size={13} /> {customer.address || "No address on file"}</span>
           </div>
-          <div className="balance-box"><small>Running balance</small><b>{INR(balance)}</b><span>manually recorded</span></div>
+          <div className="balance-box"><small>Total outstanding</small><b>{INR(balance)}</b><span>amount − paid, across all records</span></div>
         </section>
         <section className="filter-card">
           <div><CalendarDays size={18} /><b>Filter records</b></div>
@@ -579,7 +650,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
               <div className="record-header-row">
                 <button className="record-header" onClick={() => setOpen(open === i ? -1 : i)} data-testid={`ledger-record-${i}`} aria-expanded={open === i}>
                   <span className="record-date"><span className="record-dot" /><b>{fmtDate(r.date)}</b><small>{r.item}</small></span>
-                  <span className="record-balance"><b>{INR(r.balance)}</b><small>balance</small></span>
+                  <span className="record-balance"><b>{INR(r.balance)}</b><small>outstanding</small></span>
                   {open === i ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                 </button>
                 <div className="record-quick-actions">
@@ -593,9 +664,10 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
                   <div><span>Quantity</span><b>{r.quantity}</b></div>
                   <div><span>Rate</span><b>{INR(r.rate)}</b></div>
                   <div><span>Amount</span><b>{INR(r.amount)}</b></div>
-                  <div className="detail-balance"><span>Balance after entry</span><b>{INR(r.balance)}</b></div>
+                  <div><span>Paid</span><b>{INR(r.paid)}</b></div>
+                  <div className="detail-balance"><span>Outstanding balance</span><b>{INR(r.balance)}</b></div>
                   <div className="record-actions">
-                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item}\nAmount: ${INR(r.amount)}\nBalance: ${INR(r.balance)}`)} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share on WhatsApp</button>
+                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item}\nAmount: ${INR(r.amount)} · Paid: ${INR(r.paid)}\nOutstanding: ${INR(r.balance)}`)} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share on WhatsApp</button>
                   </div>
                 </div>
               )}
@@ -606,7 +678,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
           )}
         </div>
       </main>
-      <button className="whatsapp-fab" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement\nCustomer: ${customer.name}\nMobile: ${customer.mobile_number}\nCurrent balance: ${INR(balance)}\n\n${(records || []).map((r) => `${fmtDate(r.date)} · ${r.item} · ${INR(r.amount)} · Balance ${INR(r.balance)}`).join("\n")}`)} data-testid="whatsapp-all-records-button">
+      <button className="whatsapp-fab" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement\nCustomer: ${customer.name}\nMobile: ${customer.mobile_number}\nTotal outstanding: ${INR(balance)}\n\n${(records || []).map((r) => `${fmtDate(r.date)} · ${r.item} · Amt ${INR(r.amount)} · Paid ${INR(r.paid)} · Owe ${INR(r.balance)}`).join("\n")}`)} data-testid="whatsapp-all-records-button">
         <MessageCircle size={24} /><span>Share on WhatsApp</span>
       </button>
       <button className="fab" onClick={() => { setEditing(null); setEntryOpen(true); }} data-testid="add-ledger-record-button"><Plus size={24} /></button>
