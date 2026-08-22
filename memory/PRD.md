@@ -20,7 +20,8 @@ Build AccountEase, a mobile-first shop accounting and customer ledger applicatio
 - Verified production React build, desktop login/shop flow, mobile ledger flow, date filtering, and no mobile horizontal overflow.
 
 ## Prioritized backlog
-- P0: Wire React data hooks to the Spring Boot endpoints and move organizations, customers, and transactions from local demo state to PostgreSQL persistence.
-- P0: Add full JWT issuance/validation filter and owner-scoped JPA repositories/services for every endpoint.
-- P1: Add transaction create/edit UI and server-side pagination/debounced search.
+- P0: Configure the runtime to launch Spring Boot instead of the starter FastAPI process, and provide `DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, and `JWT_SECRET`.
+- P0: Wire React data hooks to Spring Boot so organizations, customers, and transactions persist to PostgreSQL rather than local preview state.
+- P0: Activate and verify the signed-token filter plus owner-scoped SQL checks already added to the Spring source.
+- P1: Connect the new ledger record plus form to `POST /api/customers/{customerId}/transactions`, then add server-side pagination/debounced search.
 - P2: Add PDF export generation and richer statement sharing with customer mobile prefilling.
