@@ -1,0 +1,95 @@
+"""Pydantic request/response schemas."""
+from __future__ import annotations
+
+from datetime import date as _date, datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# ---------- Auth ----------
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+class OwnerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    username: str
+    name: str
+    mobile_number: str | None = None
+
+
+class LoginResponse(BaseModel):
+    token: str
+    owner: OwnerOut
+
+
+# ---------- Organizations ----------
+class OrganizationCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=180)
+    address: str | None = Field(default=None, max_length=300)
+
+
+class OrganizationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    address: str | None = None
+    customer_count: int = 0
+    created_at: datetime
+
+
+# ---------- Customers ----------
+class CustomerCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=180)
+    mobile_number: str = Field(..., min_length=6, max_length=20)
+    father_name: str | None = Field(default=None, max_length=120)
+    address: str | None = Field(default=None, max_length=300)
+
+
+class CustomerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    organization_id: str
+    name: str
+    mobile_number: str
+    father_name: str | None = None
+    address: str | None = None
+    balance: Decimal = Decimal("0")
+
+
+# ---------- Transactions ----------
+class TransactionCreate(BaseModel):
+    date: _date
+    item: str = Field(..., min_length=1, max_length=200)
+    quantity: Decimal = Decimal("1")
+    rate: Decimal = Decimal("0")
+    amount: Decimal
+    balance: Decimal
+    note: str | None = None
+
+
+class TransactionUpdate(BaseModel):
+    date: _date | None = None
+    item: str | None = None
+    quantity: Decimal | None = None
+    rate: Decimal | None = None
+    amount: Decimal | None = None
+    balance: Decimal | None = None
+    note: str | None = None
+
+
+class TransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    customer_id: str
+    date: _date
+    item: str
+    quantity: Decimal
+    rate: Decimal
+    amount: Decimal
+    balance: Decimal
+    note: str | None = None
+    created_at: datetime
