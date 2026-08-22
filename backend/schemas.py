@@ -19,11 +19,42 @@ class OwnerOut(BaseModel):
     username: str
     name: str
     mobile_number: str | None = None
+    is_admin: bool = False
+    is_active: bool = True
 
 
 class LoginResponse(BaseModel):
     token: str
     owner: OwnerOut
+
+
+# ---------- Admin ----------
+class AdminOwnerCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=4, max_length=200)
+    name: str = Field(..., min_length=1, max_length=120)
+    mobile_number: str | None = Field(default=None, max_length=20)
+    is_admin: bool = False
+
+
+class AdminOwnerUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    mobile_number: str | None = Field(default=None, max_length=20)
+    password: str | None = Field(default=None, min_length=4, max_length=200)
+    is_active: bool | None = None
+    is_admin: bool | None = None
+
+
+class AdminOwnerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    username: str
+    name: str
+    mobile_number: str | None = None
+    is_admin: bool
+    is_active: bool
+    created_at: datetime
+    shop_count: int = 0
 
 
 # ---------- Organizations ----------

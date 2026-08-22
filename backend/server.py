@@ -37,6 +37,9 @@ from auth import create_access_token, get_current_owner, hash_password, verify_p
 from database import AsyncSessionLocal, engine, get_session
 from models import Base, Customer, Organization, Owner, Transaction
 from schemas import (
+    AdminOwnerCreate,
+    AdminOwnerOut,
+    AdminOwnerUpdate,
     CustomerCreate,
     CustomerOut,
     LoginRequest,
@@ -62,11 +65,12 @@ async def _startup() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         from sqlalchemy import text
-        # Idempotent add of `paid` column for existing databases created before its introduction.
+        # Idempotent migrations for existing databases
         await conn.execute(text('ALTER TABLE ae_transactions ADD COLUMN IF NOT EXISTS paid NUMERIC(14,2) NOT NULL DEFAULT 0'))
+        await conn.execute(text('ALTER TABLE ae_owners ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE'))
+        await conn.execute(text('ALTER TABLE ae_owners ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE'))
         # One-time normalisation: align legacy running-total balances with the new
-        # accounting rule `balance = amount - paid`. Runs every boot but is idempotent
-        # and cheap — Postgres just no-ops rows already in the correct state.
+        # accounting rule `balance = amount - paid`. Idempotent — Postgres no-ops rows already correct.
         await conn.execute(text('UPDATE ae_transactions SET balance = amount - paid WHERE balance <> amount - paid'))
     async with AsyncSessionLocal() as session:
         await _seed_demo(session)
@@ -79,7 +83,14 @@ async def _seed_demo(session: AsyncSession) -> None:
     result = await session.execute(select(Owner).where(Owner.username == username))
     owner = result.scalar_one_or_none()
     if owner is None:
-        owner = Owner(username=username, password_hash=hash_password(password), name="Rajesh", mobile_number="9876543210")
+        owner = Owner(
+            username=username,
+            password_hash=hash_password(password),
+            name="Rajesh",
+            mobile_number="9876543210",
+            is_admin=True,
+            is_active=True,
+        )
         session.add(owner)
         await session.flush()
 
@@ -141,9 +152,18 @@ async def _seed_demo(session: AsyncSession) -> None:
         await session.commit()
         logger.info("Seeded demo owner '%s'", username)
     else:
-        # Keep password in sync with env
+        # Keep password in sync with env + ensure the demo owner is always admin/active
+        changed = False
         if not verify_password(password, owner.password_hash):
             owner.password_hash = hash_password(password)
+            changed = True
+        if not owner.is_admin:
+            owner.is_admin = True
+            changed = True
+        if not owner.is_active:
+            owner.is_active = True
+            changed = True
+        if changed:
             await session.commit()
 
 
@@ -164,6 +184,8 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
         owner = result.scalar_one_or_none()
     if owner is None or not verify_password(payload.password, owner.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+    if not owner.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been deactivated. Contact your admin.")
     token = create_access_token(owner.id, owner.username)
     return LoginResponse(token=token, owner=OwnerOut.model_validate(owner))
 
@@ -171,6 +193,109 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
 @api.get("/auth/me", response_model=OwnerOut)
 async def me(owner: Owner = Depends(get_current_owner)) -> OwnerOut:
     return OwnerOut.model_validate(owner)
+
+
+# ---------------------------------------------------------------- admin ---
+async def _require_admin(owner: Owner = Depends(get_current_owner)) -> Owner:
+    if not owner.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return owner
+
+
+@api.get("/admin/owners", response_model=list[AdminOwnerOut])
+async def admin_list_owners(
+    admin: Owner = Depends(_require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminOwnerOut]:
+    stmt = (
+        select(Owner, func.count(Organization.id).label("shop_count"))
+        .outerjoin(Organization, Organization.owner_id == Owner.id)
+        .group_by(Owner.id)
+        .order_by(Owner.created_at.desc())
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        AdminOwnerOut(
+            id=o.id,
+            username=o.username,
+            name=o.name,
+            mobile_number=o.mobile_number,
+            is_admin=o.is_admin,
+            is_active=o.is_active,
+            created_at=o.created_at,
+            shop_count=int(count or 0),
+        )
+        for o, count in rows
+    ]
+
+
+@api.post("/admin/owners", response_model=AdminOwnerOut, status_code=201)
+async def admin_create_owner(
+    payload: AdminOwnerCreate,
+    admin: Owner = Depends(_require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminOwnerOut:
+    username = payload.username.strip().lower()
+    existing = (await session.execute(select(Owner).where(Owner.username == username))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    owner = Owner(
+        username=username,
+        password_hash=hash_password(payload.password),
+        name=payload.name.strip(),
+        mobile_number=(payload.mobile_number or None),
+        is_admin=payload.is_admin,
+        is_active=True,
+    )
+    session.add(owner)
+    await session.commit()
+    await session.refresh(owner)
+    return AdminOwnerOut(
+        id=owner.id,
+        username=owner.username,
+        name=owner.name,
+        mobile_number=owner.mobile_number,
+        is_admin=owner.is_admin,
+        is_active=owner.is_active,
+        created_at=owner.created_at,
+        shop_count=0,
+    )
+
+
+@api.patch("/admin/owners/{owner_id}", response_model=AdminOwnerOut)
+async def admin_update_owner(
+    owner_id: str,
+    payload: AdminOwnerUpdate,
+    admin: Owner = Depends(_require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminOwnerOut:
+    target = (await session.execute(select(Owner).where(Owner.id == owner_id))).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Owner not found")
+    # Guardrails: an admin cannot deactivate or demote themselves via this endpoint
+    if target.id == admin.id and (payload.is_active is False or payload.is_admin is False):
+        raise HTTPException(status_code=400, detail="You cannot deactivate or demote yourself.")
+    data = payload.model_dump(exclude_unset=True)
+    if "password" in data and data["password"]:
+        target.password_hash = hash_password(data["password"])
+    for field in ("name", "mobile_number", "is_active", "is_admin"):
+        if field in data and data[field] is not None:
+            setattr(target, field, data[field])
+    await session.commit()
+    await session.refresh(target)
+    shop_count = (await session.execute(
+        select(func.count(Organization.id)).where(Organization.owner_id == target.id)
+    )).scalar_one()
+    return AdminOwnerOut(
+        id=target.id,
+        username=target.username,
+        name=target.name,
+        mobile_number=target.mobile_number,
+        is_admin=target.is_admin,
+        is_active=target.is_active,
+        created_at=target.created_at,
+        shop_count=int(shop_count or 0),
+    )
 
 
 # --------------------------------------------------------- organizations ---

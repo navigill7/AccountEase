@@ -71,6 +71,20 @@ export async function getCustomer(customerId) {
   return data;
 }
 
+// ---------- admin ----------
+export async function adminListOwners() {
+  const { data } = await api.get("/admin/owners");
+  return data;
+}
+export async function adminCreateOwner(payload) {
+  const { data } = await api.post("/admin/owners", payload);
+  return data;
+}
+export async function adminUpdateOwner(id, payload) {
+  const { data } = await api.patch(`/admin/owners/${id}`, payload);
+  return data;
+}
+
 // ---------- transactions ----------
 export async function listTransactions(customerId, from, to) {
   const params = {};

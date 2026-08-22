@@ -69,4 +69,6 @@ async def get_current_owner(
     owner = result.scalar_one_or_none()
     if not owner:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Owner not found")
+    if not owner.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been deactivated. Contact your admin.")
     return owner

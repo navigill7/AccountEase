@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrowserRouter } from "react-router-dom";
 import {
   ArrowLeft, BookOpen, CalendarDays, ChevronDown, ChevronUp, ClipboardList,
-  LogOut, MapPin, MessageCircle, Pencil, Plus, Printer, Search, Store,
-  UserRound, Users, X,
+  Download, HandCoins, LogOut, MapPin, MessageCircle, Pencil, Plus, Power, Printer, Search, Shield, Store,
+  UserPlus, UserRound, Users, X,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import "./App.css";
 import * as API from "./api";
 
@@ -55,13 +57,18 @@ function SearchBox({ value, onChange, placeholder, testId }) {
     </div>
   );
 }
-function Topbar({ title, subtitle, onBack, onLogout, ownerName }) {
+function Topbar({ title, subtitle, onBack, onLogout, ownerName, isAdmin, onAdmin }) {
   const chip = ownerName || "Owner";
   return (
     <header className="topbar">
       <div className="brand"><div className="brand-mark"><BookOpen size={18} /></div><span>AccountEase</span></div>
       <div className="topbar-right">
-        <div className="user-chip"><div className="avatar">{initials(chip)}</div><div><b>{chip}</b><small>Owner account</small></div></div>
+        {isAdmin && onAdmin && (
+          <button className="admin-chip" onClick={onAdmin} data-testid="admin-nav-button" title="Admin dashboard">
+            <Shield size={15} /> <span>Admin</span>
+          </button>
+        )}
+        <div className="user-chip"><div className="avatar">{initials(chip)}</div><div><b>{chip}</b><small>{isAdmin ? "Admin & owner" : "Owner account"}</small></div></div>
         <button className="logout" onClick={onLogout} data-testid="logout-button"><LogOut size={16} /> <span>Sign out</span></button>
       </div>
       {title && <div className="mobile-page-title"><b>{title}</b><small>{subtitle}</small></div>}
@@ -281,7 +288,7 @@ function Login({ onLogin }) {
   );
 }
 
-function Organizations({ owner, onSelect, onLogout }) {
+function Organizations({ owner, onSelect, onLogout, onAdmin }) {
   const [shops, setShops] = useState(null); // null = loading
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
@@ -333,7 +340,7 @@ function Organizations({ owner, onSelect, onLogout }) {
 
   return (
     <div className="app-shell">
-      <Topbar onLogout={onLogout} ownerName={owner?.name} />
+      <Topbar onLogout={onLogout} ownerName={owner?.name} isAdmin={owner?.is_admin} onAdmin={onAdmin} />
       <main className="content">
         <div className="page-intro">
           <div>
@@ -371,7 +378,7 @@ function Organizations({ owner, onSelect, onLogout }) {
   );
 }
 
-function Customers({ shop, owner, onBack, onSelect, onLogout }) {
+function Customers({ shop, owner, onBack, onSelect, onLogout, onAdmin }) {
   const [customers, setCustomers] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
@@ -459,7 +466,7 @@ function Customers({ shop, owner, onBack, onSelect, onLogout }) {
 
   return (
     <div className="app-shell">
-      <Topbar title={shop.name} subtitle="Customer book" onBack={onBack} onLogout={onLogout} ownerName={owner?.name} />
+      <Topbar title={shop.name} subtitle="Customer book" onBack={onBack} onLogout={onLogout} ownerName={owner?.name} isAdmin={owner?.is_admin} onAdmin={onAdmin} />
       <main className="content narrow">
         <div className="breadcrumb"><button onClick={onBack} data-testid="organizations-back-button"><ArrowLeft size={16} /> All shops</button><span>/</span><b>{shop.name}</b></div>
         <div className="page-intro compact">
@@ -515,7 +522,7 @@ function Customers({ shop, owner, onBack, onSelect, onLogout }) {
   );
 }
 
-function Ledger({ shop, customer, owner, onBack, onLogout }) {
+function Ledger({ shop, customer, owner, onBack, onLogout, onAdmin }) {
   const [records, setRecords] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [balance, setBalance] = useState(customer.balance);
@@ -524,6 +531,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
   const [to, setTo] = useState("");
   const [applied, setApplied] = useState({ from: "", to: "" });
   const [entryOpen, setEntryOpen] = useState(false);
+  const [paymentOpen, setPaymentOpen] = useState(false);
   const [editing, setEditing] = useState(null); // record being edited
   const [saving, setSaving] = useState(false);
 
@@ -611,13 +619,52 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
     setEntryOpen(true);
   };
 
+  const savePayment = async (form) => {
+    setSaving(true);
+    try {
+      // Payments are stored as a special transaction with amount=0 so balance = -paid,
+      // which reduces the SUM(balance) running outstanding without needing a separate table.
+      const created = await API.createTransaction(customer.id, {
+        date: form.date,
+        item: form.note.trim() ? `Payment received — ${form.note.trim()}` : "Payment received",
+        quantity: "1",
+        rate: "0",
+        amount: "0",
+        paid: form.amount,
+        balance: String(-Math.abs(Number(form.amount || 0))),
+      });
+      setRecords((prev) => [created, ...(prev || [])]);
+      setPaymentOpen(false);
+      toast.success(`Payment of ${INR(form.amount)} recorded`);
+      refresh();
+    } catch (e) {
+      toast.error(API.apiErr(e, "Could not save payment"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Total received this month (client-side, no extra API call).
+  const paidThisMonth = useMemo(() => {
+    if (!records) return 0;
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    return records
+      .filter((r) => {
+        const d = new Date(`${r.date}T00:00:00`);
+        return d.getFullYear() === y && d.getMonth() === m;
+      })
+      .reduce((sum, r) => sum + Number(r.paid || 0), 0);
+  }, [records]);
+
   const entryInitial = editing
     ? { date: editing.date, item: editing.item, quantity: String(editing.quantity ?? "1"), rate: String(editing.rate ?? "0"), amount: String(editing.amount ?? "0"), paid: String(editing.paid ?? "0"), balance: String(editing.balance ?? "0") }
     : { date: isoToday(), item: "", quantity: "1", rate: "", amount: "", paid: "0", balance: "" };
 
   return (
     <div className="app-shell">
-      <Topbar title={customer.name} subtitle="Customer ledger" onBack={onBack} onLogout={onLogout} ownerName={owner?.name} />
+      <Topbar title={customer.name} subtitle="Customer ledger" onBack={onBack} onLogout={onLogout} ownerName={owner?.name} isAdmin={owner?.is_admin} onAdmin={onAdmin} />
       <main className="content narrow">
         <div className="breadcrumb"><button onClick={onBack} data-testid="customers-back-button"><ArrowLeft size={16} /> {shop.name}</button><span>/</span><b>{customer.name}</b></div>
         <section className="ledger-hero" data-testid="customer-details">
@@ -628,7 +675,12 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
             <p>{customer.mobile_number} <i>·</i> {customer.father_name ? `S/o ${customer.father_name}` : "No father's name"}</p>
             <span><MapPin size={13} /> {customer.address || "No address on file"}</span>
           </div>
-          <div className="balance-box"><small>Total outstanding</small><b>{INR(balance)}</b><span>amount − paid, across all records</span></div>
+          <div className="balance-stack">
+            <div className="balance-box"><small>Total outstanding</small><b>{INR(balance)}</b><span>amount − paid, across all records</span></div>
+            <div className="paid-chip" data-testid="paid-this-month">
+              <HandCoins size={15} /><div><small>Paid this month</small><b>{INR(paidThisMonth)}</b></div>
+            </div>
+          </div>
         </section>
         <section className="filter-card">
           <div><CalendarDays size={18} /><b>Filter records</b></div>
@@ -641,7 +693,10 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
         </section>
         <div className="records-head">
           <div><h2>Account history</h2><p className="muted">{records?.length ?? 0} records · newest first {refreshing && records && <span className="refreshing" data-testid="refreshing-records">· refreshing…</span>}</p></div>
-          <button className="text-action" onClick={() => window.print()} data-testid="print-all-records-button"><Printer size={16} /> Print all</button>
+          <div className="records-head-actions">
+            <button className="text-action" onClick={() => exportStatementPdf({ shop, customer, records: records || [], balance })} data-testid="download-pdf-button"><Download size={16} /> Download PDF</button>
+            <button className="text-action" onClick={() => window.print()} data-testid="print-all-records-button"><Printer size={16} /> Print all</button>
+          </div>
         </div>
         <div className="records-list" data-testid="ledger-records-list">
           {records === null && <div className="empty"><ClipboardList size={25} /><b>Loading records…</b><span>One moment.</span></div>}
@@ -687,12 +742,274 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
   );
 }
 
+// ---------- PDF export ----------
+function exportStatementPdf({ shop, customer, records, balance }) {
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const marginX = 40;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.setTextColor("#176b55");
+  doc.text("AccountEase", marginX, 50);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor("#666");
+  doc.setFontSize(10);
+  doc.text("Customer statement", marginX, 66);
+
+  doc.setTextColor("#182326");
+  doc.setFontSize(15);
+  doc.setFont("helvetica", "bold");
+  doc.text(customer.name, marginX, 100);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor("#555");
+  const line2 = [customer.mobile_number, customer.father_name ? `S/o ${customer.father_name}` : null, customer.address].filter(Boolean).join(" · ");
+  doc.text(line2 || "—", marginX, 116);
+  if (shop?.name) doc.text(`Shop: ${shop.name}`, marginX, 132);
+  doc.text(`Generated: ${new Date().toLocaleString("en-GB")}`, marginX, 148);
+
+  const rows = (records || []).map((r) => [
+    fmtDate(r.date),
+    r.item,
+    String(r.quantity),
+    Number(r.rate).toLocaleString("en-IN"),
+    Number(r.amount).toLocaleString("en-IN"),
+    Number(r.paid).toLocaleString("en-IN"),
+    Number(r.balance).toLocaleString("en-IN"),
+  ]);
+
+  autoTable(doc, {
+    startY: 170,
+    head: [["Date", "Item", "Qty", "Rate (₹)", "Amount (₹)", "Paid (₹)", "Outstanding (₹)"]],
+    body: rows.length ? rows : [["—", "No records yet", "", "", "", "", ""]],
+    headStyles: { fillColor: [23, 107, 85], textColor: 255, fontStyle: "bold" },
+    styles: { fontSize: 9, cellPadding: 6 },
+    columnStyles: {
+      2: { halign: "right" },
+      3: { halign: "right" },
+      4: { halign: "right" },
+      5: { halign: "right" },
+      6: { halign: "right", fontStyle: "bold" },
+    },
+    margin: { left: marginX, right: marginX },
+  });
+
+  const endY = doc.lastAutoTable.finalY + 20;
+  const totalPaid = (records || []).reduce((s, r) => s + Number(r.paid || 0), 0);
+  doc.setFontSize(11);
+  doc.setTextColor("#182326");
+  doc.text(`Total paid: Rs. ${totalPaid.toLocaleString("en-IN")}`, marginX, endY);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor("#af4d2f");
+  doc.setFontSize(13);
+  doc.text(`Total outstanding: Rs. ${Number(balance || 0).toLocaleString("en-IN")}`, marginX, endY + 20);
+
+  const safe = customer.name.replace(/[^a-z0-9]+/gi, "_");
+  doc.save(`AccountEase_${safe}_${isoToday()}.pdf`);
+}
+
+// ---------- Payment modal ----------
+function PaymentModal({ customer, onClose, onSave, saving }) {
+  const [form, setForm] = useState({ date: isoToday(), amount: "", note: "" });
+  const upd = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const amountOk = form.amount !== "" && !Number.isNaN(Number(form.amount)) && Number(form.amount) > 0;
+  return (
+    <Modal title="Record a payment" onClose={onClose}>
+      <p className="modal-copy">
+        Money received from <b>{customer.name}</b>. This creates a payment entry that reduces the total outstanding without needing a fake item row.
+      </p>
+      <div className="two-col">
+        <Field label="Date" name="payment-date" type="date" value={form.date} onChange={upd("date")} />
+        <label className="field">
+          <span>Amount received (₹)</span>
+          <input
+            name="payment-amount"
+            type="number"
+            inputMode="decimal"
+            min="0.01"
+            step="0.01"
+            value={form.amount}
+            onChange={upd("amount")}
+            onWheel={(e) => e.currentTarget.blur()}
+            placeholder="0.00"
+            data-testid="field-payment-amount"
+          />
+        </label>
+      </div>
+      <Field label="Note (optional)" name="payment-note" placeholder="e.g. Cash / UPI / Cheque #123" value={form.note} onChange={upd("note")} />
+      <div className="modal-actions">
+        <button className="button secondary" onClick={onClose} data-testid="payment-cancel">Cancel</button>
+        <button className="button primary" onClick={() => onSave(form)} disabled={saving || !amountOk} data-testid="payment-submit">
+          {saving ? "Saving…" : "Save payment"} <HandCoins size={16} />
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------- Admin dashboard ----------
+function AdminDashboard({ owner, onBack, onLogout }) {
+  const [owners, setOwners] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ username: "", password: "", name: "", mobile_number: "", is_admin: false });
+  const [query, setQuery] = useState("");
+
+  const refresh = useCallback(async (signal) => {
+    setRefreshing(true);
+    try {
+      const data = await API.adminListOwners();
+      if (!signal?.aborted) setOwners(data);
+    } catch (e) {
+      if (!signal?.aborted) toast.error(API.apiErr(e, "Could not load owners"));
+    } finally {
+      if (!signal?.aborted) setRefreshing(false);
+    }
+  }, []);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    refresh(ctrl.signal);
+    return () => ctrl.abort();
+  }, [refresh]);
+
+  const filtered = useMemo(() => {
+    if (!owners) return [];
+    if (!query.trim()) return owners;
+    const q = query.trim().toLowerCase();
+    return owners.filter((o) => o.username.toLowerCase().includes(q) || o.name.toLowerCase().includes(q));
+  }, [owners, query]);
+
+  const create = async () => {
+    setSaving(true);
+    try {
+      const created = await API.adminCreateOwner({
+        username: form.username.trim().toLowerCase(),
+        password: form.password,
+        name: form.name.trim(),
+        mobile_number: form.mobile_number.trim() || null,
+        is_admin: form.is_admin,
+      });
+      setOwners((prev) => [{ ...created, shop_count: 0 }, ...(prev || [])]);
+      toast.success(`${created.name} onboarded (username: ${created.username})`);
+      setModalOpen(false);
+      setForm({ username: "", password: "", name: "", mobile_number: "", is_admin: false });
+    } catch (e) {
+      toast.error(API.apiErr(e, "Could not create account"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleActive = async (row) => {
+    const nextActive = !row.is_active;
+    const verb = nextActive ? "reactivate" : "deactivate";
+    if (!window.confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} ${row.name}'s account?`)) return;
+    try {
+      const updated = await API.adminUpdateOwner(row.id, { is_active: nextActive });
+      setOwners((prev) => (prev || []).map((o) => (o.id === updated.id ? updated : o)));
+      toast.success(`${row.name} ${nextActive ? "reactivated" : "deactivated"}`);
+    } catch (e) {
+      toast.error(API.apiErr(e, `Could not ${verb} account`));
+    }
+  };
+
+  const formValid =
+    form.username.trim().length >= 3 &&
+    form.password.length >= 4 &&
+    form.name.trim().length > 0;
+
+  return (
+    <div className="app-shell">
+      <Topbar title="Admin dashboard" subtitle="Owner accounts" onBack={onBack} onLogout={onLogout} ownerName={owner?.name} isAdmin={owner?.is_admin} />
+      <main className="content">
+        <div className="breadcrumb"><button onClick={onBack} data-testid="admin-back-button"><ArrowLeft size={16} /> Back to shops</button><span>/</span><b>Admin</b></div>
+        <div className="page-intro compact">
+          <div>
+            <span className="eyebrow">Admin</span>
+            <h1>Owner accounts</h1>
+            <p className="muted">Onboard a new shop owner or deactivate an existing one. {refreshing && owners && <span className="refreshing">· refreshing…</span>}</p>
+          </div>
+          <div className="summary-stamp"><Shield size={18} /><div><b>{owners?.length ?? 0} accounts</b><small>{(owners || []).filter((o) => o.is_active).length} active</small></div></div>
+        </div>
+        <div className="toolbar">
+          <SearchBox value={query} onChange={setQuery} placeholder="Search by name or username" testId="admin-search-input" />
+          <button className="button primary desktop-add" onClick={() => setModalOpen(true)} data-testid="desktop-add-owner-button"><UserPlus size={17} /> Onboard owner</button>
+        </div>
+        <div className="admin-table" data-testid="admin-owners-list">
+          <div className="admin-head">
+            <span>Owner</span><span>Username</span><span>Mobile</span><span>Shops</span><span>Status</span><span></span>
+          </div>
+          {owners === null && <div className="empty"><Users size={24} /><b>Loading accounts…</b><span>One moment.</span></div>}
+          {owners !== null && filtered.map((o) => (
+            <div className={`admin-row ${!o.is_active ? "inactive" : ""}`} key={o.id} data-testid={`admin-row-${o.id}`}>
+              <div className="admin-name">
+                <div className="avatar soft">{initials(o.name)}</div>
+                <div>
+                  <b>{o.name}</b>
+                  {o.is_admin && <span className="tag admin">Admin</span>}
+                </div>
+              </div>
+              <span className="mono">{o.username}</span>
+              <span>{o.mobile_number || "—"}</span>
+              <span>{o.shop_count}</span>
+              <span>{o.is_active ? <span className="tag active">Active</span> : <span className="tag muted">Deactivated</span>}</span>
+              <div className="admin-actions">
+                {o.id === owner.id ? (
+                  <span className="you-chip">You</span>
+                ) : (
+                  <button
+                    className={o.is_active ? "button danger small" : "button primary small"}
+                    onClick={() => toggleActive(o)}
+                    data-testid={`toggle-active-${o.id}`}
+                  >
+                    <Power size={14} /> {o.is_active ? "Deactivate" : "Reactivate"}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {owners !== null && filtered.length === 0 && owners.length > 0 && (
+            <div className="empty"><Users size={24} /><b>No matches</b><span>Try another name or username.</span></div>
+          )}
+        </div>
+      </main>
+      <button className="fab" onClick={() => setModalOpen(true)} data-testid="add-owner-button"><Plus size={24} /></button>
+
+      {modalOpen && (
+        <Modal title="Onboard a new owner" onClose={() => setModalOpen(false)}>
+          <p className="modal-copy">Create a fresh login for another shop owner. They can sign in immediately with these credentials.</p>
+          <div className="two-col">
+            <Field label="Full name" name="owner-name" placeholder="Owner's full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <Field label="Mobile · optional" name="owner-mobile" placeholder="10-digit mobile" value={form.mobile_number} onChange={(e) => setForm({ ...form, mobile_number: e.target.value })} />
+          </div>
+          <div className="two-col">
+            <Field label="Username (≥3 chars)" name="owner-username" placeholder="e.g. suresh" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+            <Field label="Temporary password (≥4 chars)" name="owner-password" type="text" placeholder="Share with the owner" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          </div>
+          <label className="checkbox-field">
+            <input type="checkbox" checked={form.is_admin} onChange={(e) => setForm({ ...form, is_admin: e.target.checked })} data-testid="field-is-admin" />
+            <span>Grant admin privileges (can manage other owners)</span>
+          </label>
+          <div className="modal-actions">
+            <button className="button secondary" onClick={() => setModalOpen(false)} data-testid="add-owner-cancel">Cancel</button>
+            <button className="button primary" onClick={create} disabled={saving || !formValid} data-testid="add-owner-submit">
+              {saving ? "Onboarding…" : "Onboard owner"} <UserPlus size={16} />
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ---------- root ----------
 function App() {
   const [owner, setOwner] = useState(null); // null = unknown/logged out
   const [booted, setBooted] = useState(false);
   const [shop, setShop] = useState(null);
   const [customer, setCustomer] = useState(null);
+  const [adminView, setAdminView] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -708,7 +1025,10 @@ function App() {
     setOwner(null);
     setShop(null);
     setCustomer(null);
+    setAdminView(false);
   };
+  const openAdmin = () => setAdminView(true);
+  const closeAdmin = () => setAdminView(false);
 
   if (!booted) return <div className="app-shell" data-testid="app-boot"><div className="empty"><b>Loading…</b></div></div>;
 
@@ -716,12 +1036,14 @@ function App() {
     <BrowserRouter>
       {!owner ? (
         <Login onLogin={setOwner} />
+      ) : adminView && owner.is_admin ? (
+        <AdminDashboard owner={owner} onBack={closeAdmin} onLogout={logout} />
       ) : customer ? (
-        <Ledger shop={shop} customer={customer} owner={owner} onBack={() => setCustomer(null)} onLogout={logout} />
+        <Ledger shop={shop} customer={customer} owner={owner} onBack={() => setCustomer(null)} onLogout={logout} onAdmin={owner.is_admin ? openAdmin : undefined} />
       ) : shop ? (
-        <Customers shop={shop} owner={owner} onBack={() => setShop(null)} onSelect={setCustomer} onLogout={logout} />
+        <Customers shop={shop} owner={owner} onBack={() => setShop(null)} onSelect={setCustomer} onLogout={logout} onAdmin={owner.is_admin ? openAdmin : undefined} />
       ) : (
-        <Organizations owner={owner} onSelect={setShop} onLogout={logout} />
+        <Organizations owner={owner} onSelect={setShop} onLogout={logout} onAdmin={owner.is_admin ? openAdmin : undefined} />
       )}
       <Toaster position="top-right" richColors />
     </BrowserRouter>
