@@ -16,3 +16,12 @@
 @media(max-width:760px){.close-account-button{right:17px;bottom:158px;padding:9px 12px;font-size:.72rem}}
 .refreshing{color:var(--orange);font-weight:600;font-size:.72rem;margin-left:4px;animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+.record-header-row{display:flex;align-items:center;gap:6px;padding-right:12px}
+.record-header-row .record-header{flex:1;padding-right:8px}
+.record-quick-actions{display:flex;gap:6px;align-items:center}
+.quick-icon{border:0;background:#f4f7f2;color:#50615c;height:36px;width:36px;border-radius:9px;display:grid;place-items:center;cursor:pointer;transition:transform .15s,background .2s}
+.quick-icon:hover{transform:translateY(-1px)}
+.quick-icon.edit:hover{background:#dcefe6;color:var(--green)}
+.quick-icon.delete{color:#b04628}
+.quick-icon.delete:hover{background:#fbe6df;color:#8f371d}
+@media(max-width:760px){.record-header-row{padding-right:8px;gap:4px}.quick-icon{height:34px;width:34px;border-radius:8px}}

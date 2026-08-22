@@ -576,11 +576,17 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
           {records === null && <div className="empty"><ClipboardList size={25} /><b>Loading records…</b><span>One moment.</span></div>}
           {records !== null && records.map((r, i) => (
             <div className={`record ${open === i ? "expanded" : ""}`} key={r.id}>
-              <button className="record-header" onClick={() => setOpen(open === i ? -1 : i)} data-testid={`ledger-record-${i}`}>
-                <span className="record-date"><span className="record-dot" /><b>{fmtDate(r.date)}</b><small>{r.item}</small></span>
-                <span className="record-balance"><b>{INR(r.balance)}</b><small>balance</small></span>
-                {open === i ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-              </button>
+              <div className="record-header-row">
+                <button className="record-header" onClick={() => setOpen(open === i ? -1 : i)} data-testid={`ledger-record-${i}`} aria-expanded={open === i}>
+                  <span className="record-date"><span className="record-dot" /><b>{fmtDate(r.date)}</b><small>{r.item}</small></span>
+                  <span className="record-balance"><b>{INR(r.balance)}</b><small>balance</small></span>
+                  {open === i ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                </button>
+                <div className="record-quick-actions">
+                  <button className="quick-icon edit" onClick={() => startEdit(r)} aria-label={`Edit record from ${fmtDate(r.date)}`} data-testid={`edit-record-${i}`}><Pencil size={15} /></button>
+                  <button className="quick-icon delete" onClick={() => removeRecord(r)} aria-label={`Delete record from ${fmtDate(r.date)}`} data-testid={`delete-record-${i}`}><X size={15} /></button>
+                </div>
+              </div>
               {open === i && (
                 <div className="record-detail" data-testid={`ledger-record-detail-${i}`}>
                   <div><span>Item</span><b>{r.item}</b></div>
@@ -589,9 +595,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout }) {
                   <div><span>Amount</span><b>{INR(r.amount)}</b></div>
                   <div className="detail-balance"><span>Balance after entry</span><b>{INR(r.balance)}</b></div>
                   <div className="record-actions">
-                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item}\nAmount: ${INR(r.amount)}\nBalance: ${INR(r.balance)}`)} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share</button>
-                    <button className="edit-small" onClick={() => startEdit(r)} data-testid={`edit-record-${i}`}><Pencil size={15} /> Edit</button>
-                    <button className="delete-small" onClick={() => removeRecord(r)} data-testid={`delete-record-${i}`}><X size={15} /> Delete</button>
+                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item}\nAmount: ${INR(r.amount)}\nBalance: ${INR(r.balance)}`)} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share on WhatsApp</button>
                   </div>
                 </div>
               )}
