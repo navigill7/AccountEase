@@ -25,3 +25,8 @@ Build AccountEase, a mobile-first shop accounting and customer ledger applicatio
 - P0: Activate and verify the signed-token filter plus owner-scoped SQL checks already added to the Spring source.
 - P1: Connect the new ledger record plus form to `POST /api/customers/{customerId}/transactions`, then add server-side pagination/debounced search.
 - P2: Add PDF export generation and richer statement sharing with customer mobile prefilling.
+
+## Activation status
+- Hosted PostgreSQL settings and a generated `JWT_SECRET` are now present in `/app/backend/.env`.
+- Activation could not be completed in this workspace: Java/Maven are not installed and `/etc/supervisor/conf.d/supervisord.conf` is read-only and still launches the starter FastAPI server on port 8001.
+- The live preview therefore remains **MOCKED local state**; database persistence and JWT runtime verification are still pending an environment that can launch Spring Boot.
