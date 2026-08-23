@@ -282,7 +282,63 @@ function Login({ onLogin }) {
           </form>
           <div className="demo-note"><span>Demo access</span><b>rajesh</b><b>demo123</b></div>
         </div>
-        <small className="login-footer">Private ledger workspace · Built for everyday business</small>
+        <small className="login-footer">Private ledger workspace · Built for everyday business · <a href="/admin">Admin sign in →</a></small>
+      </div>
+    </main>
+  );
+}
+
+function AdminLogin({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const owner = await API.login(username.trim(), password);
+      if (!owner.is_admin) {
+        API.logout();
+        toast.error("This account does not have admin access.");
+        return;
+      }
+      toast.success(`Welcome back, ${owner.name}`);
+      onLogin(owner);
+    } catch (err) {
+      toast.error(API.apiErr(err, "Sign in failed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <main className="login-page">
+      <div className="login-art"><div className="art-copy">
+        <div className="brand light"><div className="brand-mark"><Shield size={18} /></div><span>AccountEase</span></div>
+        <h1>Admin<br /><em>control panel.</em></h1>
+        <p>Onboard shop owners, manage access, and keep the platform in order.</p>
+        <div className="ledger-art"><div className="ledger-lines" /><span>admin / व्यवस्थापक</span></div>
+      </div></div>
+      <div className="login-panel">
+        <div className="login-form">
+          <span className="eyebrow">Admin sign in</span>
+          <h2>Admin access</h2>
+          <p className="muted">Sign in with an admin account to manage owners.</p>
+          <form onSubmit={submit} data-testid="admin-login-form">
+            <Field label="Username" name="admin-username" placeholder="Enter admin username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <label className="field"><span>Password</span>
+              <div className="password-field">
+                <input name="admin-password" type={show ? "text" : "password"} placeholder="Enter password" value={password} onChange={(e) => setPassword(e.target.value)} data-testid="admin-field-password" />
+                <button type="button" onClick={() => setShow(!show)} data-testid="admin-password-toggle">{show ? "Hide" : "Show"}</button>
+              </div>
+            </label>
+            <button className="button primary full" type="submit" disabled={loading} data-testid="admin-login-submit-button">
+              {loading ? "Signing in…" : "Sign in"} <ArrowLeft className="flip" size={17} />
+            </button>
+          </form>
+          <div className="demo-note"><span>Demo access</span><b>rajesh</b><b>demo123</b></div>
+        </div>
+        <small className="login-footer"><a href="/">Owner sign in instead →</a></small>
       </div>
     </main>
   );
@@ -1031,6 +1087,30 @@ function App() {
   const closeAdmin = () => setAdminView(false);
 
   if (!booted) return <div className="app-shell" data-testid="app-boot"><div className="empty"><b>Loading…</b></div></div>;
+
+  const isAdminRoute = window.location.pathname.startsWith("/admin");
+
+  if (isAdminRoute) {
+    return (
+      <BrowserRouter>
+        {!owner ? (
+          <AdminLogin onLogin={setOwner} />
+        ) : owner.is_admin ? (
+          <AdminDashboard owner={owner} onBack={() => { window.location.href = "/"; }} onLogout={logout} />
+        ) : (
+          <div className="app-shell" data-testid="admin-not-authorized">
+            <div className="empty">
+              <Shield size={24} />
+              <b>Not authorized</b>
+              <span>This account doesn't have admin access.</span>
+              <button className="button secondary" onClick={logout} data-testid="admin-not-authorized-logout">Logout</button>
+            </div>
+          </div>
+        )}
+        <Toaster position="top-right" richColors />
+      </BrowserRouter>
+    );
+  }
 
   return (
     <BrowserRouter>
