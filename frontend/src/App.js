@@ -350,16 +350,16 @@ function emptyBulkRow() {
     date: isoToday(),
     item: "",
     quantity: "1",
-    rate: "",
+    mrp: "",
+    less: "0",
     amount: "",
-    paid: "0",
-    balance: "",
     manualAmount: false,
   };
 }
 
 function BulkRecordModal({ onClose, onSaveMany, saving }) {
   const [rows, setRows] = useState([emptyBulkRow(), emptyBulkRow(), emptyBulkRow()]);
+  const [paid, setPaid] = useState("0");
 
   const toNum = (v) => {
     const n = Number(v);
@@ -369,57 +369,53 @@ function BulkRecordModal({ onClose, onSaveMany, saving }) {
 
   const patchRow = (key, patch) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  const onQty = (row) => (e) => {
-    const q = e.target.value;
-    const amount = row.manualAmount ? row.amount : String(round2(toNum(q) * toNum(row.rate)));
-    const balance = String(round2(toNum(amount) - toNum(row.paid)));
-    patchRow(row.key, { quantity: q, amount, balance });
+  const recalc = (row, patch) => {
+    const next = { ...row, ...patch };
+    if (!next.manualAmount) {
+      next.amount = String(round2(toNum(next.quantity) * (toNum(next.mrp) - toNum(next.less))));
+    }
+    return next;
   };
-  const onRate = (row) => (e) => {
-    const r = e.target.value;
-    const amount = row.manualAmount ? row.amount : String(round2(toNum(row.quantity) * toNum(r)));
-    const balance = String(round2(toNum(amount) - toNum(row.paid)));
-    patchRow(row.key, { rate: r, amount, balance });
-  };
-  const onAmount = (row) => (e) => {
-    const a = e.target.value;
-    const balance = String(round2(toNum(a) - toNum(row.paid)));
-    patchRow(row.key, { amount: a, balance, manualAmount: true });
-  };
-  const onPaid = (row) => (e) => {
-    const p = e.target.value;
-    const balance = String(round2(toNum(row.amount) - toNum(p)));
-    patchRow(row.key, { paid: p, balance });
-  };
+
   const onDate = (row) => (e) => patchRow(row.key, { date: e.target.value });
   const onItem = (row) => (e) => patchRow(row.key, { item: e.target.value });
+  const onQty = (row) => (e) => patchRow(row.key, recalc(row, { quantity: e.target.value }));
+  const onMrp = (row) => (e) => patchRow(row.key, recalc(row, { mrp: e.target.value }));
+  const onLess = (row) => (e) => patchRow(row.key, recalc(row, { less: e.target.value }));
+  const onAmount = (row) => (e) => patchRow(row.key, { amount: e.target.value, manualAmount: true });
 
   const addRow = () => setRows((prev) => [...prev, emptyBulkRow()]);
   const removeRow = (key) => setRows((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.key !== key)));
 
   const isNumeric = (v) => v !== "" && v !== null && v !== undefined && !Number.isNaN(Number(v)) && Number(v) >= 0;
-  const isFilled = (r) => r.item.trim() !== "" || isNumeric(r.rate) || isNumeric(r.amount);
-  const isValid = (r) => r.item.trim() !== "" && isNumeric(r.quantity) && isNumeric(r.rate) && isNumeric(r.amount) && isNumeric(r.paid);
+  const isFilled = (r) => r.item.trim() !== "" || isNumeric(r.mrp) || isNumeric(r.amount);
+  const isValid = (r) => r.item.trim() !== "" && isNumeric(r.quantity) && isNumeric(r.mrp) && isNumeric(r.less) && isNumeric(r.amount);
 
   const filledRows = rows.filter(isFilled);
   const validRows = filledRows.filter(isValid);
   const hasInvalidFilledRow = filledRows.length !== validRows.length;
-  const disabled = saving || validRows.length === 0 || hasInvalidFilledRow;
+
+  const total = round2(validRows.reduce((sum, r) => sum + toNum(r.amount), 0));
+  const paidOk = isNumeric(paid);
+  const balance = round2(total - (paidOk ? toNum(paid) : 0));
+
+  const disabled = saving || validRows.length === 0 || hasInvalidFilledRow || !paidOk;
+
+  const handleSave = () => onSaveMany(validRows, paidOk ? toNum(paid) : 0, total);
 
   return (
     <Modal title="Add ledger records" wide onClose={onClose}>
       <p className="modal-copy">
-        Add as many rows as you need, then save them all together. <b>Amount</b> auto-fills from Quantity × Rate; <b>Balance</b> is Amount − Paid. Blank rows are ignored.
+        Add as many items as you need. <b>Amount</b> auto-fills from Qty × (MRP − Less); override it by hand if needed. Enter one <b>Paid</b> amount for the whole bill — <b>Balance</b> is Total − Paid. Blank rows are ignored.
       </p>
       <div className="bulk-table">
         <div className="bulk-row bulk-head">
           <span>Date</span>
           <span>Item</span>
           <span>Qty</span>
-          <span>Rate (₹)</span>
+          <span>MRP (₹)</span>
+          <span>Less (₹)</span>
           <span>Amount (₹)</span>
-          <span>Paid (₹)</span>
-          <span>Balance</span>
           <span />
         </div>
         {rows.map((row, idx) => (
@@ -427,10 +423,9 @@ function BulkRecordModal({ onClose, onSaveMany, saving }) {
             <input type="date" value={row.date} onChange={onDate(row)} data-testid={`bulk-row-date-${idx}`} />
             <input type="text" placeholder="Item" value={row.item} onChange={onItem(row)} data-testid={`bulk-row-item-${idx}`} />
             <input type="number" min="0" step="0.001" placeholder="0" value={row.quantity} onChange={onQty(row)} data-testid={`bulk-row-quantity-${idx}`} />
-            <input type="number" min="0" step="0.01" placeholder="0" value={row.rate} onChange={onRate(row)} data-testid={`bulk-row-rate-${idx}`} />
+            <input type="number" min="0" step="0.01" placeholder="0" value={row.mrp} onChange={onMrp(row)} data-testid={`bulk-row-mrp-${idx}`} />
+            <input type="number" min="0" step="0.01" placeholder="0" value={row.less} onChange={onLess(row)} data-testid={`bulk-row-less-${idx}`} />
             <input type="number" min="0" step="0.01" placeholder="0" value={row.amount} onChange={onAmount(row)} data-testid={`bulk-row-amount-${idx}`} />
-            <input type="number" min="0" step="0.01" placeholder="0" value={row.paid} onChange={onPaid(row)} data-testid={`bulk-row-paid-${idx}`} />
-            <input value={row.balance} readOnly className="readonly-input" data-testid={`bulk-row-balance-${idx}`} />
             <button
               type="button"
               className="icon-btn"
@@ -452,9 +447,23 @@ function BulkRecordModal({ onClose, onSaveMany, saving }) {
           One or more rows are missing an item name or have an invalid number — fix or clear them before saving.
         </p>
       )}
+      <div className="bulk-summary">
+        <div className="bulk-summary-line">
+          <span>Total (₹)</span>
+          <b data-testid="bulk-total">{total.toFixed(2)}</b>
+        </div>
+        <label className="field">
+          <span>Paid (₹)</span>
+          <input type="number" min="0" step="0.01" value={paid} onChange={(e) => setPaid(e.target.value)} data-testid="bulk-paid" />
+        </label>
+        <div className="bulk-summary-line">
+          <span>Outstanding balance (₹) · auto</span>
+          <b data-testid="bulk-balance">{balance.toFixed(2)}</b>
+        </div>
+      </div>
       <div className="modal-actions">
         <button className="button secondary" onClick={onClose} data-testid="bulk-record-cancel">Cancel</button>
-        <button className="button primary" onClick={() => onSaveMany(validRows)} disabled={disabled} data-testid="bulk-record-submit">
+        <button className="button primary" onClick={handleSave} disabled={disabled} data-testid="bulk-record-submit">
           {saving ? "Saving…" : `Save ${validRows.length || ""} record${validRows.length === 1 ? "" : "s"}`} <Plus size={16} />
         </button>
       </div>
@@ -777,29 +786,49 @@ function Ledger({ shop, customer, owner, onBack, onLogout, onAdmin }) {
     }
   };
 
-  const saveManyRecords = async (rows) => {
+  const saveManyRecords = async (rows, paidTotal, billTotal) => {
     if (!rows.length) return;
     setSaving(true);
     let succeeded = 0;
     let failed = 0;
     for (const row of rows) {
+      const netRate = (Number(row.mrp) || 0) - (Number(row.less) || 0);
       const payload = {
         date: row.date,
         item: row.item.trim(),
         quantity: row.quantity || "0",
-        rate: row.rate || "0",
+        rate: String(netRate),
         amount: row.amount || "0",
-        paid: row.paid || "0",
-        balance: row.balance || "0",
+        paid: "0",
+        balance: row.amount || "0",
+        note: `MRP ₹${Number(row.mrp || 0).toFixed(2)}, Less ₹${Number(row.less || 0).toFixed(2)}`,
       };
       try {
         // eslint-disable-next-line no-await-in-loop
         const created = await API.createTransaction(customer.id, payload);
         setRecords((prev) => [created, ...(prev || [])]);
-        setBalance(created.balance);
         succeeded += 1;
       } catch (e) {
         failed += 1;
+      }
+    }
+    // Payment against the whole bill is recorded as one shared entry, same convention as
+    // the regular "Record payment" flow — item rows above all carry paid=0.
+    if (!failed && paidTotal > 0) {
+      try {
+        const paymentPayload = {
+          date: rows[0].date,
+          item: `Payment received — against bill of ${INR(billTotal)}`,
+          quantity: "1",
+          rate: "0",
+          amount: "0",
+          paid: String(paidTotal),
+          balance: String(-Math.abs(paidTotal)),
+        };
+        const created = await API.createTransaction(customer.id, paymentPayload);
+        setRecords((prev) => [created, ...(prev || [])]);
+      } catch (e) {
+        toast.error(API.apiErr(e, "Items saved, but recording the payment failed"));
       }
     }
     setSaving(false);
