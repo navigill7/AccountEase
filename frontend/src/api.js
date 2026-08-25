@@ -97,6 +97,10 @@ export async function createTransaction(customerId, payload) {
   const { data } = await api.post(`/customers/${customerId}/transactions`, payload);
   return data;
 }
+export async function createBulkTransaction(customerId, payload) {
+  const { data } = await api.post(`/customers/${customerId}/transactions/bulk`, payload);
+  return data;
+}
 export async function updateTransaction(txId, payload) {
   const { data } = await api.patch(`/transactions/${txId}`, payload);
   return data;
