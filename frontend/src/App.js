@@ -24,6 +24,27 @@ const fmtDate = (iso) => {
 const isoToday = () => new Date().toISOString().slice(0, 10);
 const initials = (s) => s.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 
+// One line per record for the "share all" WhatsApp summary — itemized bills list every
+// item with its quantity; single-item records show the item's own quantity.
+const recordShareLine = (r) => {
+  if (r.items && r.items.length > 0) {
+    const itemLines = r.items.map((it) => `   • ${it.item} (Qty ${it.quantity}) — ${INR(it.amount)}`).join("\n");
+    return `${fmtDate(r.date)}\n${itemLines}\n   Total ${INR(r.amount)} · Paid ${INR(r.paid)} · Owe ${INR(r.balance)}`;
+  }
+  return `${fmtDate(r.date)} · ${r.item} (Qty ${r.quantity}) · Amt ${INR(r.amount)} · Paid ${INR(r.paid)} · Owe ${INR(r.balance)}`;
+};
+
+// Full message for sharing a single record on WhatsApp — includes quantity for every item.
+const recordShareText = (customer, r) => {
+  if (r.items && r.items.length > 0) {
+    const itemLines = r.items
+      .map((it) => `${it.item} — Qty ${it.quantity} · MRP ${INR(it.mrp)} · Less ${INR(it.less)} · ${INR(it.amount)}`)
+      .join("\n");
+    return `AccountEase statement for ${customer.name}\n${fmtDate(r.date)}\n${itemLines}\n\nTotal: ${INR(r.amount)} · Paid: ${INR(r.paid)}\nOutstanding: ${INR(r.balance)}`;
+  }
+  return `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item} (Qty ${r.quantity})\nAmount: ${INR(r.amount)} · Paid: ${INR(r.paid)}\nOutstanding: ${INR(r.balance)}`;
+};
+
 // ---------- primitives ----------
 function Modal({ title, children, onClose, wide }) {
   return (
@@ -786,56 +807,31 @@ function Ledger({ shop, customer, owner, onBack, onLogout, onAdmin }) {
     }
   };
 
-  const saveManyRecords = async (rows, paidTotal, billTotal) => {
+  const saveManyRecords = async (rows, paidTotal) => {
     if (!rows.length) return;
     setSaving(true);
-    let succeeded = 0;
-    let failed = 0;
-    for (const row of rows) {
-      const netRate = (Number(row.mrp) || 0) - (Number(row.less) || 0);
+    try {
       const payload = {
-        date: row.date,
-        item: row.item.trim(),
-        quantity: row.quantity || "0",
-        rate: String(netRate),
-        amount: row.amount || "0",
-        paid: "0",
-        balance: row.amount || "0",
-        note: `MRP ₹${Number(row.mrp || 0).toFixed(2)}, Less ₹${Number(row.less || 0).toFixed(2)}`,
+        date: rows[0].date,
+        paid: String(paidTotal || 0),
+        items: rows.map((row) => ({
+          item: row.item.trim(),
+          quantity: row.quantity || "0",
+          mrp: row.mrp || "0",
+          less: row.less || "0",
+          amount: row.amount || undefined,
+        })),
       };
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const created = await API.createTransaction(customer.id, payload);
-        setRecords((prev) => [created, ...(prev || [])]);
-        succeeded += 1;
-      } catch (e) {
-        failed += 1;
-      }
+      const created = await API.createBulkTransaction(customer.id, payload);
+      setRecords((prev) => [created, ...(prev || [])]);
+      toast.success(`Ledger entry saved with ${rows.length} item${rows.length === 1 ? "" : "s"}`);
+      setBulkOpen(false);
+    } catch (e) {
+      toast.error(API.apiErr(e, "Could not save these records"));
+    } finally {
+      setSaving(false);
+      refresh();
     }
-    // Payment against the whole bill is recorded as one shared entry, same convention as
-    // the regular "Record payment" flow — item rows above all carry paid=0.
-    if (!failed && paidTotal > 0) {
-      try {
-        const paymentPayload = {
-          date: rows[0].date,
-          item: `Payment received — against bill of ${INR(billTotal)}`,
-          quantity: "1",
-          rate: "0",
-          amount: "0",
-          paid: String(paidTotal),
-          balance: String(-Math.abs(paidTotal)),
-        };
-        const created = await API.createTransaction(customer.id, paymentPayload);
-        setRecords((prev) => [created, ...(prev || [])]);
-      } catch (e) {
-        toast.error(API.apiErr(e, "Items saved, but recording the payment failed"));
-      }
-    }
-    setSaving(false);
-    if (succeeded) toast.success(`${succeeded} record${succeeded === 1 ? "" : "s"} saved`);
-    if (failed) toast.error(`${failed} record${failed === 1 ? "" : "s"} failed to save`);
-    if (!failed) setBulkOpen(false);
-    refresh();
   };
 
   const removeRecord = async (r) => {
@@ -945,20 +941,41 @@ function Ledger({ shop, customer, owner, onBack, onLogout, onAdmin }) {
                   {open === i ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                 </button>
                 <div className="record-quick-actions">
-                  <button className="quick-icon edit" onClick={() => startEdit(r)} aria-label={`Edit record from ${fmtDate(r.date)}`} data-testid={`edit-record-${i}`}><Pencil size={15} /></button>
+                  <button className="quick-icon edit" onClick={() => startEdit(r)} disabled={r.items && r.items.length > 0} title={r.items && r.items.length > 0 ? "Multi-item bills aren't editable yet — delete and re-add if needed" : undefined} aria-label={`Edit record from ${fmtDate(r.date)}`} data-testid={`edit-record-${i}`}><Pencil size={15} /></button>
                   <button className="quick-icon delete" onClick={() => removeRecord(r)} aria-label={`Delete record from ${fmtDate(r.date)}`} data-testid={`delete-record-${i}`}><X size={15} /></button>
                 </div>
               </div>
               {open === i && (
                 <div className="record-detail" data-testid={`ledger-record-detail-${i}`}>
-                  <div><span>Item</span><b>{r.item}</b></div>
-                  <div><span>Quantity</span><b>{r.quantity}</b></div>
-                  <div><span>Rate</span><b>{INR(r.rate)}</b></div>
-                  <div><span>Amount</span><b>{INR(r.amount)}</b></div>
-                  <div><span>Paid</span><b>{INR(r.paid)}</b></div>
-                  <div className="detail-balance"><span>Outstanding balance</span><b>{INR(r.balance)}</b></div>
+                  {r.items && r.items.length > 0 ? (
+                    <>
+                      <div className="bulk-detail-items">
+                        {r.items.map((it, itIdx) => (
+                          <div className="bulk-detail-item" key={it.id} data-testid={`ledger-record-${i}-item-${itIdx}`}>
+                            <span>{it.item}</span>
+                            <span>Qty {it.quantity}</span>
+                            <span>MRP {INR(it.mrp)}</span>
+                            <span>Less {INR(it.less)}</span>
+                            <b>{INR(it.amount)}</b>
+                          </div>
+                        ))}
+                      </div>
+                      <div><span>Total (₹)</span><b>{INR(r.amount)}</b></div>
+                      <div><span>Paid</span><b>{INR(r.paid)}</b></div>
+                      <div className="detail-balance"><span>Outstanding balance</span><b>{INR(r.balance)}</b></div>
+                    </>
+                  ) : (
+                    <>
+                      <div><span>Item</span><b>{r.item}</b></div>
+                      <div><span>Quantity</span><b>{r.quantity}</b></div>
+                      <div><span>Rate</span><b>{INR(r.rate)}</b></div>
+                      <div><span>Amount</span><b>{INR(r.amount)}</b></div>
+                      <div><span>Paid</span><b>{INR(r.paid)}</b></div>
+                      <div className="detail-balance"><span>Outstanding balance</span><b>{INR(r.balance)}</b></div>
+                    </>
+                  )}
                   <div className="record-actions">
-                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement for ${customer.name}\n${fmtDate(r.date)} · ${r.item}\nAmount: ${INR(r.amount)} · Paid: ${INR(r.paid)}\nOutstanding: ${INR(r.balance)}`)} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share on WhatsApp</button>
+                    <button className="whatsapp-small" onClick={() => shareToMobile(customer.mobile_number, recordShareText(customer, r))} data-testid={`whatsapp-record-${i}`}><MessageCircle size={16} /> Share on WhatsApp</button>
                   </div>
                 </div>
               )}
@@ -969,7 +986,7 @@ function Ledger({ shop, customer, owner, onBack, onLogout, onAdmin }) {
           )}
         </div>
       </main>
-      <button className="whatsapp-fab" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement\nCustomer: ${customer.name}\nMobile: ${customer.mobile_number}\nTotal outstanding: ${INR(balance)}\n\n${(records || []).map((r) => `${fmtDate(r.date)} · ${r.item} · Amt ${INR(r.amount)} · Paid ${INR(r.paid)} · Owe ${INR(r.balance)}`).join("\n")}`)} data-testid="whatsapp-all-records-button">
+      <button className="whatsapp-fab" onClick={() => shareToMobile(customer.mobile_number, `AccountEase statement\nCustomer: ${customer.name}\nMobile: ${customer.mobile_number}\nTotal outstanding: ${INR(balance)}\n\n${(records || []).map((r) => recordShareLine(r)).join("\n\n")}`)} data-testid="whatsapp-all-records-button">
         <MessageCircle size={24} /><span>Share on WhatsApp</span>
       </button>
       <button className="fab" onClick={() => { setEditing(null); setBulkOpen(true); }} data-testid="add-ledger-record-button"><Plus size={24} /></button>
