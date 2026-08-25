@@ -94,3 +94,27 @@ class Transaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
 
     customer: Mapped[Customer] = relationship(back_populates="transactions")
+    items: Mapped[list["TransactionItem"]] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan", order_by="TransactionItem.position"
+    )
+
+
+class TransactionItem(Base):
+    """A single line item within a ledger entry (bill). A Transaction with one or more
+    TransactionItem rows represents a multi-item bill entered together — the parent
+    Transaction carries the shared date/paid/balance/total, and each TransactionItem
+    carries its own item name, quantity, MRP and Less (discount)."""
+
+    __tablename__ = "ae_transaction_items"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("ae_transactions.id", ondelete="CASCADE"), nullable=False, index=True)
+    item: Mapped[str] = mapped_column(String(200), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("1"), nullable=False)
+    mrp: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0"), nullable=False)
+    less: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0"), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    position: Mapped[int] = mapped_column(default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+    transaction: Mapped[Transaction] = relationship(back_populates="items")
