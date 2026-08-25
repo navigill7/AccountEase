@@ -114,6 +114,30 @@ class TransactionUpdate(BaseModel):
     note: str | None = None
 
 
+class TransactionItemIn(BaseModel):
+    item: str = Field(..., min_length=1, max_length=200)
+    quantity: Decimal = Field(default=Decimal("1"), ge=Decimal("0"))
+    mrp: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
+    less: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
+    amount: Decimal | None = Field(default=None, ge=Decimal("0"))
+
+
+class TransactionItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    item: str
+    quantity: Decimal
+    mrp: Decimal
+    less: Decimal
+    amount: Decimal
+
+
+class BulkTransactionCreate(BaseModel):
+    date: _date
+    paid: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
+    items: list[TransactionItemIn] = Field(..., min_length=1)
+
+
 class TransactionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -127,3 +151,4 @@ class TransactionOut(BaseModel):
     balance: Decimal
     note: str | None = None
     created_at: datetime
+    items: list[TransactionItemOut] = []
