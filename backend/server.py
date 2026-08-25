@@ -11,6 +11,7 @@ Endpoints (all prefixed with /api):
 - GET    /customers/{customer_id}
 - GET    /customers/{customer_id}/transactions?from=&to=
 - POST   /customers/{customer_id}/transactions
+- POST   /customers/{customer_id}/transactions/bulk   (multi-item bill: one date/paid/balance/total, many line items)
 - PATCH  /transactions/{transaction_id}
 - DELETE /transactions/{transaction_id}
 """
@@ -32,14 +33,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from auth import create_access_token, get_current_owner, hash_password, verify_password
 from database import AsyncSessionLocal, engine, get_session
-from models import Base, Customer, Organization, Owner, Transaction
+from models import Base, Customer, Organization, Owner, Transaction, TransactionItem
 from schemas import (
     AdminOwnerCreate,
     AdminOwnerOut,
     AdminOwnerUpdate,
+    BulkTransactionCreate,
     CustomerCreate,
     CustomerOut,
     LoginRequest,
@@ -48,6 +51,7 @@ from schemas import (
     OrganizationOut,
     OwnerOut,
     TransactionCreate,
+    TransactionItemOut,
     TransactionOut,
     TransactionUpdate,
 )
@@ -484,7 +488,7 @@ async def list_transactions(
     session: AsyncSession = Depends(get_session),
 ) -> list[TransactionOut]:
     await _customer_or_404(session, customer_id, owner.id)
-    stmt = select(Transaction).where(Transaction.customer_id == customer_id).order_by(
+    stmt = select(Transaction).options(selectinload(Transaction.items)).where(Transaction.customer_id == customer_id).order_by(
         Transaction.date.desc(), Transaction.created_at.desc()
     )
     if from_:
@@ -537,6 +541,7 @@ async def create_transaction(
         paid=payload.paid,
         balance=balance,
         note=payload.note,
+        items=[],
     )
     session.add(tx)
     await session.commit()
@@ -544,9 +549,88 @@ async def create_transaction(
     return TransactionOut.model_validate(tx)
 
 
+def _summarise_items(item_names: list[str]) -> str:
+    if not item_names:
+        return "Bill"
+    if len(item_names) <= 2:
+        return ", ".join(item_names)
+    return f"{item_names[0]}, {item_names[1]} +{len(item_names) - 2} more"
+
+
+@api.post("/customers/{customer_id}/transactions/bulk", response_model=TransactionOut, status_code=201)
+async def create_bulk_transaction(
+    customer_id: str,
+    payload: BulkTransactionCreate,
+    owner: Owner = Depends(get_current_owner),
+    session: AsyncSession = Depends(get_session),
+) -> TransactionOut:
+    """Create one ledger entry (bill) made up of several line items, sharing a single
+    date/paid/balance/total — e.g. 4 items entered together, one Paid amount, one Balance."""
+    await _customer_or_404(session, customer_id, owner.id)
+
+    line_items: list[TransactionItem] = []
+    total = Decimal("0")
+    for idx, item_in in enumerate(payload.items):
+        item_amount = item_in.amount
+        if item_amount is None:
+            item_amount = (Decimal(item_in.quantity) * (Decimal(item_in.mrp) - Decimal(item_in.less))).quantize(Decimal("0.01"))
+        total += item_amount
+        line_items.append(
+            TransactionItem(
+                item=item_in.item.strip(),
+                quantity=item_in.quantity,
+                mrp=item_in.mrp,
+                less=item_in.less,
+                amount=item_amount,
+                position=idx,
+            )
+        )
+    total = total.quantize(Decimal("0.01"))
+    balance = (total - Decimal(payload.paid)).quantize(Decimal("0.01"))
+    total_qty = sum((Decimal(li.quantity) for li in line_items), Decimal("0"))
+
+    tx = Transaction(
+        customer_id=customer_id,
+        date=payload.date,
+        item=_summarise_items([li.item for li in line_items]),
+        quantity=total_qty,
+        rate=Decimal("0"),
+        amount=total,
+        paid=payload.paid,
+        balance=balance,
+        note=None,
+        items=line_items,
+    )
+    session.add(tx)
+    await session.commit()
+
+    # Objects already carry their DB-assigned id/created_at from the flush during commit() —
+    # build the response directly from them instead of touching `tx.items` again, which would
+    # otherwise trigger an async lazy-load outside of an awaited context.
+    items_out = [
+        TransactionItemOut(id=li.id, item=li.item, quantity=li.quantity, mrp=li.mrp, less=li.less, amount=li.amount)
+        for li in line_items
+    ]
+    return TransactionOut(
+        id=tx.id,
+        customer_id=tx.customer_id,
+        date=tx.date,
+        item=tx.item,
+        quantity=tx.quantity,
+        rate=tx.rate,
+        amount=tx.amount,
+        paid=tx.paid,
+        balance=tx.balance,
+        note=tx.note,
+        created_at=tx.created_at,
+        items=items_out,
+    )
+
+
 async def _tx_or_404(session: AsyncSession, tx_id: str, owner_id: str) -> Transaction:
     stmt = (
         select(Transaction)
+        .options(selectinload(Transaction.items))
         .join(Customer, Customer.id == Transaction.customer_id)
         .join(Organization, Organization.id == Customer.organization_id)
         .where(Transaction.id == tx_id, Organization.owner_id == owner_id)
